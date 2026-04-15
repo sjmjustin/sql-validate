@@ -103,7 +103,7 @@ node test-harness/verify.js
 node test-harness/test-ignore.js
 ```
 
-## Automated Hook (Active in This Project)
+## Automated Hook
 
 A `PostToolUse` hook in `.claude/settings.json` automatically runs `sql-validate` after every Edit or Write to a supported source file. If errors are found, the tool output appears inline and a system message instructs you to fix the SQL before proceeding.
 

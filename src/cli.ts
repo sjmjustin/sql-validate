@@ -48,12 +48,26 @@ program
 // Constants must be defined before program.parse() triggers the action
 const SCANNABLE_EXTENSIONS = new Set([
   ".sql",
-  ".cs",
-  ".ts",
-  ".tsx",
-  ".js",
-  ".jsx",
+  // .NET
+  ".cs", ".vb", ".aspx",
+  // JavaScript / TypeScript
+  ".ts", ".tsx", ".js", ".jsx",
+  // Python
   ".py",
+  // Java / JVM
+  ".java", ".kt", ".scala", ".bx",
+  // PHP
+  ".php",
+  // ColdFusion
+  ".cfm", ".cfml", ".cfc",
+  // Classic ASP / VBScript
+  ".asp", ".vbs",
+  // Ruby
+  ".rb",
+  // Go
+  ".go",
+  // Rust
+  ".rs",
 ]);
 
 program.parse();

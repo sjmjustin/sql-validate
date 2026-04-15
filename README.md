@@ -139,12 +139,24 @@ The `Action:` line is specifically written for AI agent consumption — it tells
 
 ## Supported Source Languages
 
-| Language | SQL Extraction Method |
-|----------|----------------------|
-| **C#** (.cs) | `@"..."` verbatim strings, `"""..."""` raw strings, regular `"..."` strings |
-| **TypeScript/JavaScript** (.ts, .js, .tsx, .jsx) | `` `...` `` template literals, regular strings |
-| **Python** (.py) | `"""..."""` / `'''...'''` triple-quoted strings, f-strings (interpolations replaced with placeholders) |
-| **SQL** (.sql) | Full file, split on `GO` batch separators |
+| Language | Extensions | SQL Extraction Method |
+|----------|-----------|----------------------|
+| **C#** | .cs | `@"..."` verbatim strings, `"""..."""` raw strings, regular `"..."` strings |
+| **VB.NET** | .vb | `"..."` strings with `""` escaping |
+| **ASP.NET** | .aspx | C#-style embedded code blocks |
+| **Classic ASP / VBScript** | .asp, .vbs | `"..."` strings with `""` escaping |
+| **TypeScript / JavaScript** | .ts, .tsx, .js, .jsx | `` `...` `` template literals, regular strings |
+| **Python** | .py | `"""..."""` / `'''...'''` triple-quoted strings, f-strings |
+| **Java** | .java | `"..."` strings, `"""..."""` text blocks (Java 15+) |
+| **Kotlin** | .kt | `"..."` strings, `"""..."""` raw strings |
+| **Scala** | .scala | `"..."` strings, `"""..."""` multi-line strings |
+| **BoxLang** | .bx | `"..."` strings, `"""..."""` text blocks |
+| **PHP** | .php | `"..."`, `'...'`, heredoc `<<<SQL...SQL;` / nowdoc |
+| **ColdFusion** | .cfm, .cfml, .cfc | `<cfquery>` tags, `queryExecute("...")` in CFScript |
+| **Ruby** | .rb | `"..."`, `'...'`, heredoc `<<~SQL...SQL` |
+| **Go** | .go | `` `...` `` raw strings, `"..."` strings |
+| **Rust** | .rs | `r#"..."#` raw strings, `"..."` strings |
+| **SQL** | .sql | Full file, split on `GO` batch separators |
 
 ## CLI Reference
 

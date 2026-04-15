@@ -22,6 +22,30 @@ export function extractQueries(filePath: string): ExtractedQuery[] {
       return extractFromJsTs(filePath, content, lines);
     case ".py":
       return extractFromPython(filePath, content, lines);
+    case ".java":
+    case ".bx":
+    case ".kt":
+    case ".scala":
+      return extractFromJavaLike(filePath, content, lines);
+    case ".php":
+      return extractFromPhp(filePath, content, lines);
+    case ".cfm":
+    case ".cfml":
+    case ".cfc":
+      return extractFromColdFusion(filePath, content, lines);
+    case ".asp":
+    case ".vbs":
+    case ".vb":
+      return extractFromVbLike(filePath, content, lines);
+    case ".aspx":
+      // ASPX files contain C#-style embedded code
+      return extractFromCSharpFile(filePath, content, lines);
+    case ".rb":
+      return extractFromRuby(filePath, content, lines);
+    case ".go":
+      return extractFromGo(filePath, content, lines);
+    case ".rs":
+      return extractFromRust(filePath, content, lines);
     default:
       return [];
   }
@@ -289,6 +313,424 @@ function extractFromPython(
       .replace(/\{[^}]*\}/g, "'__PARAM__'");
     if (!containsQueryKeywords(raw)) continue;
     if (raw.length < 15) continue;
+
+    const lineStart = offsetToLine(content, match.index);
+    results.push({
+      sql: raw,
+      file: filePath,
+      lineStart,
+      lineEnd: lineStart,
+      sourceLines: getSourceLines(lines, lineStart, lineStart),
+    });
+  }
+
+  return results;
+}
+
+// ── Java / Kotlin / Scala / BoxLang: "..." strings + """...""" text blocks ──
+
+function extractFromJavaLike(
+  filePath: string,
+  content: string,
+  lines: string[]
+): ExtractedQuery[] {
+  const results: ExtractedQuery[] = [];
+  const coveredRanges: Array<[number, number]> = [];
+
+  // Text blocks (Java 15+, Kotlin, Scala): """..."""
+  const textBlockRegex = /"""([\s\S]*?)"""/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = textBlockRegex.exec(content)) !== null) {
+    coveredRanges.push([match.index, match.index + match[0].length]);
+
+    const raw = match[1];
+    if (!containsQueryKeywords(raw)) continue;
+
+    const startOffset = match.index;
+    const lineStart = offsetToLine(content, startOffset);
+    const lineEnd = offsetToLine(content, startOffset + match[0].length);
+
+    results.push({
+      sql: raw,
+      file: filePath,
+      lineStart,
+      lineEnd,
+      sourceLines: getSourceLines(lines, lineStart, lineEnd),
+    });
+  }
+
+  // Regular strings "..." (single line, skip ranges covered by text blocks)
+  const stringRegex = /"((?:[^"\\]|\\.)*)"/g;
+  while ((match = stringRegex.exec(content)) !== null) {
+    const matchStart = match.index;
+    const matchEnd = matchStart + match[0].length;
+    if (coveredRanges.some(([s, e]) => matchStart >= s && matchEnd <= e)) continue;
+
+    const raw = match[1]
+      .replace(/\\n/g, "\n")
+      .replace(/\\t/g, "\t")
+      .replace(/\\"/g, '"');
+    if (!containsQueryKeywords(raw)) continue;
+    if (raw.length < 15) continue;
+    if (looksLikeCode(raw)) continue;
+
+    const lineStart = offsetToLine(content, match.index);
+    results.push({
+      sql: raw,
+      file: filePath,
+      lineStart,
+      lineEnd: lineStart,
+      sourceLines: getSourceLines(lines, lineStart, lineStart),
+    });
+  }
+
+  return results;
+}
+
+// ── PHP: "...", '...', heredoc <<<SQL...SQL; ──
+
+function extractFromPhp(
+  filePath: string,
+  content: string,
+  lines: string[]
+): ExtractedQuery[] {
+  const results: ExtractedQuery[] = [];
+  let match: RegExpExecArray | null;
+
+  // Heredoc / Nowdoc: <<<SQL ... SQL; or <<<'SQL' ... SQL;
+  // Common identifiers: SQL, EOT, EOQ, QUERY, EOF
+  // PHP heredoc/nowdoc: <<<SQL ... SQL; (closing may be indented in PHP 7.3+)
+  const heredocRegex = /<<<['"]?(\w+)['"]?\r?\n([\s\S]*?)\r?\n\s*\1;/g;
+  while ((match = heredocRegex.exec(content)) !== null) {
+    const raw = match[2];
+    if (!containsQueryKeywords(raw)) continue;
+
+    const startOffset = match.index;
+    const lineStart = offsetToLine(content, startOffset);
+    const lineEnd = offsetToLine(content, startOffset + match[0].length);
+
+    results.push({
+      sql: raw.replace(/\{\$[^}]*\}/g, "'__PARAM__'").replace(/\$[\w]+/g, "'__PARAM__'"),
+      file: filePath,
+      lineStart,
+      lineEnd,
+      sourceLines: getSourceLines(lines, lineStart, lineEnd),
+    });
+  }
+
+  // Double-quoted strings "..."
+  const dqRegex = /"((?:[^"\\]|\\.)*)"/g;
+  while ((match = dqRegex.exec(content)) !== null) {
+    const raw = match[1]
+      .replace(/\\n/g, "\n")
+      .replace(/\\t/g, "\t")
+      .replace(/\\"/g, '"')
+      .replace(/\{\$[^}]*\}/g, "'__PARAM__'")
+      .replace(/\$[\w]+/g, "'__PARAM__'");
+    if (!containsQueryKeywords(raw)) continue;
+    if (raw.length < 15) continue;
+    if (looksLikeCode(raw)) continue;
+
+    const lineStart = offsetToLine(content, match.index);
+    results.push({
+      sql: raw,
+      file: filePath,
+      lineStart,
+      lineEnd: lineStart,
+      sourceLines: getSourceLines(lines, lineStart, lineStart),
+    });
+  }
+
+  // Single-quoted strings '...' (no interpolation in PHP)
+  const sqRegex = /'((?:[^'\\]|\\.)*)'/g;
+  while ((match = sqRegex.exec(content)) !== null) {
+    const raw = match[1].replace(/\\'/g, "'");
+    if (!containsQueryKeywords(raw)) continue;
+    if (raw.length < 15) continue;
+    if (looksLikeCode(raw)) continue;
+
+    const lineStart = offsetToLine(content, match.index);
+    results.push({
+      sql: raw,
+      file: filePath,
+      lineStart,
+      lineEnd: lineStart,
+      sourceLines: getSourceLines(lines, lineStart, lineStart),
+    });
+  }
+
+  return results;
+}
+
+// ── ColdFusion: <cfquery> tags + queryExecute("...") ──
+
+function extractFromColdFusion(
+  filePath: string,
+  content: string,
+  lines: string[]
+): ExtractedQuery[] {
+  const results: ExtractedQuery[] = [];
+  let match: RegExpExecArray | null;
+
+  // <cfquery ...>SQL HERE</cfquery>
+  const cfqueryRegex = /<cfquery[^>]*>([\s\S]*?)<\/cfquery>/gi;
+  while ((match = cfqueryRegex.exec(content)) !== null) {
+    let raw = match[1].trim();
+    // Strip CF tags like <cfqueryparam ...>
+    raw = raw.replace(/<cfqueryparam[^>]*>/gi, "'__PARAM__'");
+    raw = raw.replace(/<\/?cf\w+[^>]*>/gi, "");
+    if (!containsQueryKeywords(raw)) continue;
+
+    const startOffset = match.index;
+    const lineStart = offsetToLine(content, startOffset);
+    const lineEnd = offsetToLine(content, startOffset + match[0].length);
+
+    results.push({
+      sql: raw,
+      file: filePath,
+      lineStart,
+      lineEnd,
+      sourceLines: getSourceLines(lines, lineStart, lineEnd),
+    });
+  }
+
+  // queryExecute("...") or queryExecute('...')  (CFScript syntax)
+  const qeRegex = /queryExecute\s*\(\s*["']([\s\S]*?)["']\s*[,)]/gi;
+  while ((match = qeRegex.exec(content)) !== null) {
+    const raw = match[1];
+    if (!containsQueryKeywords(raw)) continue;
+
+    const startOffset = match.index;
+    const lineStart = offsetToLine(content, startOffset);
+    const lineEnd = offsetToLine(content, startOffset + match[0].length);
+
+    results.push({
+      sql: raw.replace(/#[\w.]+#/g, "'__PARAM__'"),
+      file: filePath,
+      lineStart,
+      lineEnd,
+      sourceLines: getSourceLines(lines, lineStart, lineEnd),
+    });
+  }
+
+  // Also extract from regular string literals in CFScript blocks
+  const stringRegex = /"((?:[^"\\]|\\.)*)"/g;
+  while ((match = stringRegex.exec(content)) !== null) {
+    const raw = match[1].replace(/#[\w.]+#/g, "'__PARAM__'");
+    if (!containsQueryKeywords(raw)) continue;
+    if (raw.length < 15) continue;
+    if (looksLikeCode(raw)) continue;
+
+    const lineStart = offsetToLine(content, match.index);
+    results.push({
+      sql: raw,
+      file: filePath,
+      lineStart,
+      lineEnd: lineStart,
+      sourceLines: getSourceLines(lines, lineStart, lineStart),
+    });
+  }
+
+  return results;
+}
+
+// ── VB / VBScript / Classic ASP: "..." strings with "" escaping ──
+
+function extractFromVbLike(
+  filePath: string,
+  content: string,
+  lines: string[]
+): ExtractedQuery[] {
+  const results: ExtractedQuery[] = [];
+  let match: RegExpExecArray | null;
+
+  // VB/VBScript strings: "..." with "" as escaped quote
+  const stringRegex = /"((?:[^"]|"")*)"/g;
+  while ((match = stringRegex.exec(content)) !== null) {
+    const raw = match[1].replace(/""/g, '"');
+    if (!containsQueryKeywords(raw)) continue;
+    if (raw.length < 15) continue;
+    if (looksLikeCode(raw)) continue;
+
+    const lineStart = offsetToLine(content, match.index);
+    results.push({
+      sql: raw,
+      file: filePath,
+      lineStart,
+      lineEnd: lineStart,
+      sourceLines: getSourceLines(lines, lineStart, lineStart),
+    });
+  }
+
+  // VB string concatenation is common: "SELECT " & var & " FROM ..."
+  // We catch individual pieces above; full reconstruction isn't feasible
+
+  return results;
+}
+
+// ── Ruby: "...", '...', heredoc <<~SQL...SQL ──
+
+function extractFromRuby(
+  filePath: string,
+  content: string,
+  lines: string[]
+): ExtractedQuery[] {
+  const results: ExtractedQuery[] = [];
+  let match: RegExpExecArray | null;
+
+  // Heredoc: <<~SQL ... SQL  or  <<-SQL ... SQL  or  <<SQL ... SQL
+  const heredocRegex = /<<[~-]?['"]?(\w+)['"]?\r?\n([\s\S]*?)\r?\n\s*\1/g;
+  while ((match = heredocRegex.exec(content)) !== null) {
+    const raw = match[2];
+    if (!containsQueryKeywords(raw)) continue;
+
+    const startOffset = match.index;
+    const lineStart = offsetToLine(content, startOffset);
+    const lineEnd = offsetToLine(content, startOffset + match[0].length);
+
+    results.push({
+      sql: raw.replace(/#\{[^}]*\}/g, "'__PARAM__'"),
+      file: filePath,
+      lineStart,
+      lineEnd,
+      sourceLines: getSourceLines(lines, lineStart, lineEnd),
+    });
+  }
+
+  // Double-quoted strings "..." (support interpolation)
+  const dqRegex = /"((?:[^"\\]|\\.)*)"/g;
+  while ((match = dqRegex.exec(content)) !== null) {
+    const raw = match[1]
+      .replace(/\\n/g, "\n")
+      .replace(/#\{[^}]*\}/g, "'__PARAM__'");
+    if (!containsQueryKeywords(raw)) continue;
+    if (raw.length < 15) continue;
+    if (looksLikeCode(raw)) continue;
+
+    const lineStart = offsetToLine(content, match.index);
+    results.push({
+      sql: raw,
+      file: filePath,
+      lineStart,
+      lineEnd: lineStart,
+      sourceLines: getSourceLines(lines, lineStart, lineStart),
+    });
+  }
+
+  // Single-quoted strings '...' (no interpolation)
+  const sqRegex = /'((?:[^'\\]|\\.)*)'/g;
+  while ((match = sqRegex.exec(content)) !== null) {
+    const raw = match[1];
+    if (!containsQueryKeywords(raw)) continue;
+    if (raw.length < 15) continue;
+    if (looksLikeCode(raw)) continue;
+
+    const lineStart = offsetToLine(content, match.index);
+    results.push({
+      sql: raw,
+      file: filePath,
+      lineStart,
+      lineEnd: lineStart,
+      sourceLines: getSourceLines(lines, lineStart, lineStart),
+    });
+  }
+
+  return results;
+}
+
+// ── Go: `...` raw strings + "..." strings ──
+
+function extractFromGo(
+  filePath: string,
+  content: string,
+  lines: string[]
+): ExtractedQuery[] {
+  const results: ExtractedQuery[] = [];
+  let match: RegExpExecArray | null;
+
+  // Backtick raw strings (multi-line, no escapes)
+  const rawStringRegex = /`([\s\S]*?)`/g;
+  while ((match = rawStringRegex.exec(content)) !== null) {
+    const raw = match[1];
+    if (!containsQueryKeywords(raw)) continue;
+
+    const startOffset = match.index;
+    const lineStart = offsetToLine(content, startOffset);
+    const lineEnd = offsetToLine(content, startOffset + match[0].length);
+
+    results.push({
+      sql: raw,
+      file: filePath,
+      lineStart,
+      lineEnd,
+      sourceLines: getSourceLines(lines, lineStart, lineEnd),
+    });
+  }
+
+  // Regular strings "..."
+  const stringRegex = /"((?:[^"\\]|\\.)*)"/g;
+  while ((match = stringRegex.exec(content)) !== null) {
+    const raw = match[1]
+      .replace(/\\n/g, "\n")
+      .replace(/\\t/g, "\t")
+      .replace(/\\"/g, '"');
+    if (!containsQueryKeywords(raw)) continue;
+    if (raw.length < 15) continue;
+    if (looksLikeCode(raw)) continue;
+
+    const lineStart = offsetToLine(content, match.index);
+    results.push({
+      sql: raw,
+      file: filePath,
+      lineStart,
+      lineEnd: lineStart,
+      sourceLines: getSourceLines(lines, lineStart, lineStart),
+    });
+  }
+
+  return results;
+}
+
+// ── Rust: "..." strings + r#"..."# raw strings ──
+
+function extractFromRust(
+  filePath: string,
+  content: string,
+  lines: string[]
+): ExtractedQuery[] {
+  const results: ExtractedQuery[] = [];
+  let match: RegExpExecArray | null;
+
+  // Raw strings: r"...", r#"..."#, r##"..."##, etc.
+  const rawRegex = /r#*"([\s\S]*?)"#*/g;
+  while ((match = rawRegex.exec(content)) !== null) {
+    const raw = match[1];
+    if (!containsQueryKeywords(raw)) continue;
+
+    const startOffset = match.index;
+    const lineStart = offsetToLine(content, startOffset);
+    const lineEnd = offsetToLine(content, startOffset + match[0].length);
+
+    results.push({
+      sql: raw,
+      file: filePath,
+      lineStart,
+      lineEnd,
+      sourceLines: getSourceLines(lines, lineStart, lineEnd),
+    });
+  }
+
+  // Regular strings "..."
+  const stringRegex = /(?<!r#*)"((?:[^"\\]|\\.)*)"/g;
+  while ((match = stringRegex.exec(content)) !== null) {
+    const raw = match[1]
+      .replace(/\\n/g, "\n")
+      .replace(/\\t/g, "\t")
+      .replace(/\\"/g, '"');
+    if (!containsQueryKeywords(raw)) continue;
+    if (raw.length < 15) continue;
+    if (looksLikeCode(raw)) continue;
 
     const lineStart = offsetToLine(content, match.index);
     results.push({

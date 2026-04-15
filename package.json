@@ -1,0 +1,49 @@
+{
+  "name": "sql-validate",
+  "version": "0.1.0",
+  "description": "Static analysis CLI that validates SQL queries in source code against SQL Server schema files. Built for AI coding agent pipelines.",
+  "main": "dist/cli.js",
+  "bin": {
+    "sql-validate": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/cli.js",
+    "dev": "tsc && node dist/cli.js",
+    "test": "node test-harness/generate.js && node test-harness/verify.js"
+  },
+  "keywords": [
+    "sql",
+    "sql-server",
+    "t-sql",
+    "static-analysis",
+    "linter",
+    "schema-validation",
+    "ssms",
+    "ai-agent",
+    "claude",
+    "code-quality"
+  ],
+  "author": "Justin Scott",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sjmjustin/sql-validate.git"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "type": "commonjs",
+  "dependencies": {
+    "chalk": "^4.1.2",
+    "commander": "^14.0.3",
+    "glob": "^13.0.6",
+    "minimatch": "^10.2.5",
+    "typescript": "^6.0.2"
+  },
+  "devDependencies": {
+    "@types/glob": "^8.1.0",
+    "@types/minimatch": "^5.1.2",
+    "@types/node": "^25.6.0"
+  }
+}

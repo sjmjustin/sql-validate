@@ -1,0 +1,22 @@
+node_modules/
+dist/
+*.js.map
+*.d.ts.map
+
+# Generated test corpus (regenerate with: node test-harness/generate.js)
+test-harness/src/
+test-harness/expected-errors.json
+test-harness/actual-results.json
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Claude Code local settings (project settings are committed)
+.claude/settings.local.json

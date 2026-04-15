@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
+import { readFileAutoEncoding } from "./file-reader";
 
 const LOCAL_IGNORE_FILE = ".saignore";
 const GLOBAL_DIR = path.join(
@@ -31,7 +32,7 @@ export function readLineFromFile(filePath: string, lineNumber: number): string {
   if (!fs.existsSync(resolved)) {
     throw new Error(`File not found: ${resolved}`);
   }
-  const content = fs.readFileSync(resolved, "utf-8");
+  const content = readFileAutoEncoding(resolved);
   const lines = content.split(/\r?\n/);
   if (lineNumber < 1 || lineNumber > lines.length) {
     throw new Error(

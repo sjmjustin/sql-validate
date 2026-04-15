@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
+import { readFileAutoEncoding } from "./file-reader";
 import {
   SchemaCatalog,
   SchemaTable,
@@ -25,7 +26,7 @@ export function parseSchemaFiles(filePaths: string[]): SchemaCatalog {
   for (const filePath of filePaths) {
     const resolved = path.resolve(filePath);
     catalog.sourceFiles.push(resolved);
-    const content = fs.readFileSync(resolved, "utf-8");
+    const content = readFileAutoEncoding(resolved);
     parseSchemaContent(content, resolved, catalog);
   }
 

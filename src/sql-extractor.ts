@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
+import { readFileAutoEncoding } from "./file-reader";
 import { ExtractedQuery } from "./types";
 
 /**
@@ -7,7 +8,7 @@ import { ExtractedQuery } from "./types";
  */
 export function extractQueries(filePath: string): ExtractedQuery[] {
   const ext = path.extname(filePath).toLowerCase();
-  const content = fs.readFileSync(filePath, "utf-8");
+  const content = readFileAutoEncoding(filePath);
   const lines = content.split(/\r?\n/);
 
   switch (ext) {

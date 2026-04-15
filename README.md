@@ -136,7 +136,7 @@ C:\project\src\repos\UserRepo.cs:441500bcf4cb9d18e25a689ac67d94e581fdfc23a6a5fe6
 C:\project\src\data\queries.sql:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 ```
 
-If the source line changes (even whitespace), the hash won't match and the error will reappear — which is the intended behavior, since the code changed and should be re-validated.
+The hash is resilient against common code churn — whitespace changes (tabs to spaces, indent level shifts) and line number changes (code added/removed above) won't break the match, since the line is trimmed and lowercased before hashing. The ignore only stops matching if the actual SQL content on the line changes, which is the intended behavior since the code should be re-validated.
 
 ## Example Output
 

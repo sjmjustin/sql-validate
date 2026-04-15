@@ -29,7 +29,7 @@ AI coding agents (Claude, Copilot, Cursor, etc.) are remarkably good at writing 
 - **Phantom functions** — `dbo.fn_GetUserEmail()` that doesn't exist in your database
 - **Bad index hints** — `WITH (INDEX(IX_Users_EmailAddress))` referencing a nonexistent index
 
-These errors compile fine, pass type checks, and look plausible in code review. They only blow up at runtime, often in production, often at 2 AM.
+These errors compile fine, pass type checks, and look plausible in code review. They only blow up at runtime, often in production, often at 2 AM. If you're thinking, "yeah, but my QA team would catch errors like that before it ever made it to production.", how about you do your QA team (or your AI test swarm if you're into that sort of thing) a favor and use a tool like this that catches them before they waste valuable time filing bug reports about missing SQL columns and find the less obvious problems.
 
 `sql-validate` catches them at write time by comparing every SQL reference against your actual database schema.
 
@@ -284,7 +284,7 @@ sql-validate/
 
 ## Known Limitations
 
-- **SQL Server only.** This tool parses T-SQL and SSMS-style `CREATE` scripts. It will not work with PostgreSQL, MySQL, Oracle, or SQLite schemas.
+- **SQL Server only.** This tool parses T-SQL and SSMS-style `CREATE` scripts. It will not work with PostgreSQL, MySQL, Oracle, or SQLite schemas. If you'd like to add other flavors of SQL into the tool with a --flavor argument and a full test harness, I would be honored to include it.
 - **Static extraction only.** SQL constructed via string concatenation (`"SELECT " + cols + " FROM "`) will not be fully analyzed. The tool extracts complete string literals, not dynamically-assembled queries.
 - **No semantic analysis.** It checks that *names* exist — not that your query is logically correct, performant, or returns the right data.
 - **No type checking.** It won't catch `WHERE IntColumn = 'string'` type mismatches.

@@ -72,6 +72,10 @@ function buildAliasMap(sql: string, catalog: SchemaCatalog): AliasMap {
     const { schema, name } = parseSimpleQualifiedName(rawTable);
     // Skip if the table name is a SQL keyword (parser noise like "FROM dbo.SELECT")
     if (isSqlKeyword(name)) return;
+    // Skip built-in schemas (sys, information_schema) and system databases
+    if (isBuiltinSchema(schema) || isSystemDatabase(schema)) return;
+    // Skip names that are clearly not identifiers (contain spaces, operators, etc.)
+    if (/[^a-zA-Z0-9_#@]/.test(name)) return;
     const fqn = `${schema.toLowerCase()}.${name.toLowerCase()}`;
     referencedTables.add(fqn);
 
@@ -159,6 +163,18 @@ function buildAliasMap(sql: string, catalog: SchemaCatalog): AliasMap {
     registerTable(mergeMatch[1], mergeMatch[2]);
   }
 
+  // Detect CTEs: WITH name AS ( ... ) — register CTE names so they aren't
+  // flagged as missing tables when referenced in the main query
+  const cteRegex = /\bWITH\s+(\[?[\w]+\]?)(?:\s*\([^)]*\))?\s+AS\s*\(/gi;
+  let cteMatch: RegExpExecArray | null;
+  while ((cteMatch = cteRegex.exec(sql)) !== null) {
+    const cteName = stripBrackets(cteMatch[1]).toLowerCase();
+    if (!isSqlKeyword(cteName)) {
+      // Register as a known alias pointing to a virtual table
+      aliases.set(cteName, { schema: "__cte__", table: cteName, fqn: `__cte__.${cteName}` });
+    }
+  }
+
   return { aliases, referencedTables };
 }
 
@@ -172,11 +188,18 @@ function validateTableRefs(
   const errors: ValidationError[] = [];
 
   for (const fqn of aliasMap.referencedTables) {
+    // Skip CTE references (registered by buildAliasMap)
+    if (fqn.startsWith("__cte__.")) continue;
+
     if (!catalog.tables.has(fqn)) {
       // Try without schema prefix (bare name lookup)
       const bareName = fqn.split(".")[1];
       const found = findTableByBareName(bareName, catalog);
       if (found) continue;
+
+      // Skip if the bare name is a CTE alias (not just the table's own self-registration)
+      const aliasEntry = aliasMap.aliases.get(bareName);
+      if (aliasEntry && aliasEntry.fqn.startsWith("__cte__.")) continue;
 
       // Find the line where this table is referenced
       const tableName = fqn.split(".").pop() || fqn;
@@ -230,9 +253,16 @@ function validateColumnRefs(
     const colName = stripBrackets(match[2]);
     const colNameLower = colName.toLowerCase();
 
+    // Skip if this looks like an expression, not a column name
+    // (CASE, string concat, interpolation, etc.)
+    if (looksLikeExpression(colName)) continue;
+
     // Look up the qualifier in the alias map
     const tableRef = aliasMap.aliases.get(qualifier);
     if (!tableRef) continue; // Unknown qualifier — may be a schema prefix, skip
+
+    // Skip CTE columns (we don't know their column lists)
+    if (tableRef.fqn.startsWith("__cte__.")) continue;
 
     const table = catalog.tables.get(tableRef.fqn);
     if (!table) continue; // Table doesn't exist — already caught by table validation
@@ -293,8 +323,8 @@ function validateUnqualifiedColumns(
   const errors: ValidationError[] = [];
   const sql = query.sql;
 
-  // Extract SELECT column list
-  const selectMatch = sql.match(/SELECT\s+(?:TOP\s+\d+\s+)?(?:DISTINCT\s+)?([\s\S]*?)\bFROM\b/i);
+  // Extract SELECT column list (strip TOP N, TOP (N), TOP {param}, DISTINCT)
+  const selectMatch = sql.match(/SELECT\s+(?:TOP\s+(?:\d+|\([^)]*\)|\{[^}]*\})\s+)?(?:DISTINCT\s+)?([\s\S]*?)\bFROM\b/i);
   if (!selectMatch) return errors;
 
   const selectList = selectMatch[1];
@@ -309,10 +339,12 @@ function validateUnqualifiedColumns(
     if (/\./.test(trimmed)) continue;          // qualified reference
     if (/^['"]/.test(trimmed)) continue;       // string literal
     if (/^\d/.test(trimmed)) continue;         // numeric literal
+    if (looksLikeExpression(trimmed)) continue; // CASE, concat, interpolation
     if (/\bAS\b/i.test(trimmed)) {
       // Has alias — check the part before AS
       const beforeAs = trimmed.replace(/\s+AS\s+.*$/i, "").trim();
       if (/[.(]/.test(beforeAs)) continue;
+      if (looksLikeExpression(beforeAs)) continue;
       checkUnqualifiedColumn(beforeAs, query, table, aliasMap, catalog, errors);
     } else {
       checkUnqualifiedColumn(trimmed, query, table, aliasMap, catalog, errors);
@@ -332,6 +364,7 @@ function checkUnqualifiedColumn(
 ): void {
   const cleaned = stripBrackets(colName.trim());
   if (!cleaned || isSqlKeyword(cleaned)) return;
+  if (looksLikeExpression(cleaned)) return;
 
   const colNameLower = cleaned.toLowerCase();
   if (!table.columns.has(colNameLower)) {
@@ -669,6 +702,34 @@ function isBuiltinSchema(schema: string): boolean {
   const builtins = new Set([
     "sys", "information_schema", "guest", "db_owner",
     "db_accessadmin", "db_securityadmin", "db_ddladmin",
+    "db_datareader", "db_datawriter", "db_backupoperator",
   ]);
   return builtins.has(schema.toLowerCase());
+}
+
+/** SQL Server system databases that should be skipped */
+function isSystemDatabase(name: string): boolean {
+  const systemDbs = new Set([
+    "master", "msdb", "tempdb", "model", "resource",
+  ]);
+  return systemDbs.has(name.toLowerCase());
+}
+
+/**
+ * Heuristic: does this "column name" look like an expression rather than
+ * an identifier? Catches CASE expressions, string concatenation,
+ * interpolation artifacts, TOP clauses, etc.
+ */
+function looksLikeExpression(name: string): boolean {
+  // Contains spaces (real column names don't, but CASE WHEN ... does)
+  if (/\s/.test(name)) return true;
+  // Contains operators: +, -, *, /, =, <, >, etc.
+  if (/[+\-*/<>=!|&]/.test(name)) return true;
+  // Contains interpolation markers: {, }, $
+  if (/[{}$]/.test(name)) return true;
+  // Contains string delimiters
+  if (/['"]/.test(name)) return true;
+  // Starts with a number
+  if (/^\d/.test(name)) return true;
+  return false;
 }

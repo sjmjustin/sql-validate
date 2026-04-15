@@ -207,7 +207,7 @@ Add to your project's `.claude/settings.json`:
         "hooks": [
           {
             "type": "command",
-            "command": "f=$(node -e \"let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{const j=JSON.parse(d);process.stdout.write(j.tool_input.file_path)})\" <&0); if echo \"$f\" | grep -qiE '\\.(cs|ts|js|py|sql)$'; then result=$(sql-validate --schema /absolute/path/to/schema/*.sql --src \"$f\" 2>&1); rc=$?; if [ $rc -eq 1 ]; then echo \"$result\"; echo \"{\\\"systemMessage\\\":\\\"sql-validate found SQL schema errors. Review the Action: lines above and fix before proceeding.\\\"}\"; fi; fi",
+            "command": "f=$(node -e \"let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{const j=JSON.parse(d);process.stdout.write(j.tool_input.file_path)})\" <&0); if echo \"$f\" | grep -qiE '\\.(cs|vb|aspx|ts|tsx|js|jsx|py|java|kt|scala|bx|php|cfm|cfml|cfc|asp|vbs|rb|go|rs|sql)$'; then result=$(sql-validate --schema /absolute/path/to/schema/*.sql --src \"$f\" 2>&1); rc=$?; if [ $rc -eq 1 ]; then echo \"$result\"; echo \"{\\\"systemMessage\\\":\\\"sql-validate found SQL schema errors. Review the Action: lines above and fix before proceeding.\\\"}\"; fi; fi",
             "timeout": 30,
             "statusMessage": "Validating SQL references..."
           }

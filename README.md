@@ -98,9 +98,45 @@ sql-validate --schema db/schema/*.sql --src ./src --format json
 
 | Code | Meaning |
 |------|---------|
-| `0`  | No validation errors found |
+| `0`  | No validation errors found (ignored errors don't count) |
 | `1`  | Validation errors found (details on stdout) |
 | `2`  | Tool error (bad schema path, parse failure, etc.) |
+
+## Ignoring False Positives
+
+When the tool flags a query you know is correct (e.g., dynamic SQL, a table from a linked server, or a pattern the parser can't handle), you can suppress it:
+
+```bash
+# Ignore a specific line in a specific file
+sql-validate --ignore src/repos/UserRepository.cs:187
+
+# Store the ignore globally (applies across all projects)
+sql-validate --ignore src/repos/UserRepository.cs:187 --global
+```
+
+This reads the line from the file, normalizes it (trim + lowercase), hashes it with SHA-256, and stores a `filepath:hash` entry in:
+- **`.saignore`** — project-local file in your working directory (commit this to share with your team)
+- **`~/.sql-validate/globalignore`** — user-global file (with `--global`)
+
+On subsequent scans, any error whose source line matches a hash in the ignore list is suppressed. Instead of the full error block, you'll see a brief notice:
+
+```
+Ignored errors:
+  [IGNORED] src/repos/UserRepository.cs:187 — INVALID_TABLE: Table "linked.Remote... (hash: 441500bcf4cb)
+```
+
+The hash is shown so you can find and remove it from `.saignore` if the line changes or you want to un-ignore it.
+
+### `.saignore` File Format
+
+```
+# Lines starting with # are comments
+# Format: absolute_filepath:sha256hash
+C:\project\src\repos\UserRepo.cs:441500bcf4cb9d18e25a689ac67d94e581fdfc23a6a5fe64f9b99460a873e3a9
+C:\project\src\data\queries.sql:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+```
+
+If the source line changes (even whitespace), the hash won't match and the error will reappear — which is the intended behavior, since the code changed and should be re-validated.
 
 ## Example Output
 
@@ -163,7 +199,7 @@ The `Action:` line is specifically written for AI agent consumption — it tells
 ```
 sql-validate [options]
 
-Options:
+Scan mode:
   --schema <paths...>    One or more SQL Server schema files (SSMS CREATE scripts)
   --src <paths...>       Source directories or files to scan
   --exclude <globs...>   Glob patterns to skip
@@ -171,6 +207,13 @@ Options:
   --format <type>        Output format: text | json  (default: text)
   --severity <level>     Minimum severity: error | warning  (default: error)
   --verbose              Show scan progress on stderr
+
+Ignore mode:
+  --ignore <file:line>   Add a line to the ignore list (e.g. --ignore src/repo.cs:187)
+  --global               Store ignore entry in global file (~/.sql-validate/globalignore)
+                         instead of project-local .saignore
+
+General:
   -V, --version          Output version number
   -h, --help             Display help
 ```
@@ -287,6 +330,7 @@ sql-validate/
 │   ├── src/                # Generated test corpus (200 files)
 │   ├── generate.js         # Test corpus generator
 │   ├── verify.js           # Accuracy verification script
+│   ├── test-ignore.js      # .saignore feature tests
 │   └── expected-errors.json
 ├── test-fixtures/           # Small hand-crafted test cases
 ├── dist/                    # Compiled output

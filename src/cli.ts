@@ -10,6 +10,13 @@ import { extractQueries } from "./sql-extractor";
 import { validateQueries } from "./validator";
 import { formatText, formatJson, filterBySeverity } from "./formatter";
 import { CliOptions, Severity, ExtractedQuery } from "./types";
+import {
+  addIgnoreEntry,
+  loadAllIgnoreEntries,
+  isIgnored,
+  hashLine,
+  readLineFromFile,
+} from "./ignore-manager";
 
 const program = new Command();
 
@@ -19,11 +26,11 @@ program
     "Static analysis tool that validates SQL queries in source code against SQL Server schema files."
   )
   .version("1.0.0")
-  .requiredOption(
+  .option(
     "--schema <paths...>",
     "One or more SQL Server schema files (SSMS CREATE scripts)"
   )
-  .requiredOption("--src <paths...>", "Source directories or files to scan")
+  .option("--src <paths...>", "Source directories or files to scan")
   .option(
     "--exclude <globs...>",
     "Glob patterns to exclude",
@@ -36,9 +43,36 @@ program
     "error"
   )
   .option("--verbose", "Show verbose output including scan progress", false)
+  .option(
+    "--ignore <file:line>",
+    "Add a specific file:line to the ignore list (e.g. --ignore src/repo.cs:187)"
+  )
+  .option(
+    "--global",
+    "When used with --ignore, store in global ignore file instead of project .saignore",
+    false
+  )
   .action(async (opts) => {
     try {
-      await run(opts as CliOptions);
+      const options = opts as CliOptions;
+
+      // ── Ignore mode: add entry and exit ──
+      if (options.ignore) {
+        await runIgnore(options.ignore, options.global || false);
+        return;
+      }
+
+      // ── Scan mode: require --schema and --src ──
+      if (!options.schema || options.schema.length === 0) {
+        console.error("Error: --schema is required for scanning. Use --help for usage.");
+        process.exit(2);
+      }
+      if (!options.src || options.src.length === 0) {
+        console.error("Error: --src is required for scanning. Use --help for usage.");
+        process.exit(2);
+      }
+
+      await run(options);
     } catch (err: any) {
       console.error(`Error: ${err.message}`);
       process.exit(2);
@@ -71,6 +105,39 @@ const SCANNABLE_EXTENSIONS = new Set([
 ]);
 
 program.parse();
+
+// ── Ignore mode ──
+
+async function runIgnore(fileLineArg: string, global: boolean): Promise<void> {
+  // Parse file:line argument — last colon separates path from line number
+  const lastColon = fileLineArg.lastIndexOf(":");
+  if (lastColon === -1 || lastColon === fileLineArg.length - 1) {
+    console.error(
+      'Error: --ignore requires format "file:line" (e.g. --ignore src/repo.cs:187)'
+    );
+    process.exit(2);
+  }
+
+  const filePath = fileLineArg.substring(0, lastColon);
+  const lineStr = fileLineArg.substring(lastColon + 1);
+  const lineNumber = parseInt(lineStr, 10);
+
+  if (isNaN(lineNumber) || lineNumber < 1) {
+    console.error(`Error: Invalid line number "${lineStr}". Must be a positive integer.`);
+    process.exit(2);
+  }
+
+  const { entry, ignoreFile, line } = addIgnoreEntry(filePath, lineNumber, global);
+
+  console.log(`Added ignore entry:`);
+  console.log(`  File:   ${entry.filePath}`);
+  console.log(`  Line ${lineNumber}: ${line.trim()}`);
+  console.log(`  Hash:   ${entry.hash}`);
+  console.log(`  Saved to: ${ignoreFile}`);
+  process.exit(0);
+}
+
+// ── Scan mode ──
 
 async function run(opts: CliOptions): Promise<void> {
   // ── Resolve and validate schema files ──
@@ -137,15 +204,40 @@ async function run(opts: CliOptions): Promise<void> {
   // Filter by severity
   errors = filterBySeverity(errors, opts.severity as Severity);
 
-  // ── Output results ──
-  if (opts.format === "json") {
-    console.log(formatJson(errors));
-  } else {
-    console.log(formatText(errors));
+  // ── Check ignore list ──
+  const ignoreEntries = loadAllIgnoreEntries();
+  const activeErrors = [];
+  const ignoredErrors = [];
+
+  for (const error of errors) {
+    // Read the actual source line at the error location to hash it
+    let lineContent = "";
+    try {
+      lineContent = readLineFromFile(error.file, error.lineStart);
+    } catch {
+      // If we can't read the line, don't ignore it
+    }
+
+    const match = lineContent
+      ? isIgnored(error.file, lineContent, ignoreEntries)
+      : null;
+
+    if (match) {
+      ignoredErrors.push({ error, hash: match.hash });
+    } else {
+      activeErrors.push(error);
+    }
   }
 
-  // Exit code: 0 = clean, 1 = errors found
-  process.exit(errors.length > 0 ? 1 : 0);
+  // ── Output results ──
+  if (opts.format === "json") {
+    console.log(formatJson(activeErrors, ignoredErrors));
+  } else {
+    console.log(formatText(activeErrors, ignoredErrors));
+  }
+
+  // Exit code: 0 = clean, 1 = errors found (ignored errors don't count)
+  process.exit(activeErrors.length > 0 ? 1 : 0);
 }
 
 // ── File resolution helpers ──

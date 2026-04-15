@@ -109,4 +109,6 @@ export interface CliOptions {
   format: "text" | "json";
   severity: Severity;
   verbose: boolean;
+  ignore?: string;
+  global?: boolean;
 }

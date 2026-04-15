@@ -1,22 +1,60 @@
 import chalk from "chalk";
 import { ValidationError, Severity } from "./types";
 
+interface IgnoredError {
+  error: ValidationError;
+  hash: string;
+}
+
 /**
  * Format validation errors as human- and AI-readable text output.
  */
-export function formatText(errors: ValidationError[]): string {
-  if (errors.length === 0) {
+export function formatText(
+  errors: ValidationError[],
+  ignoredErrors: IgnoredError[] = []
+): string {
+  const lines: string[] = [];
+
+  if (errors.length === 0 && ignoredErrors.length === 0) {
     return chalk.green("✓ No SQL validation errors found.\n");
   }
 
-  const lines: string[] = [];
+  if (errors.length === 0 && ignoredErrors.length > 0) {
+    lines.push(
+      chalk.green("✓ No active SQL validation errors found.") +
+        chalk.dim(` (${ignoredErrors.length} ignored)\n`)
+    );
+  }
 
-  lines.push(
-    chalk.red.bold(`Found ${errors.length} SQL validation error(s):\n`)
-  );
+  if (errors.length > 0) {
+    lines.push(
+      chalk.red.bold(`Found ${errors.length} SQL validation error(s):`) +
+        (ignoredErrors.length > 0
+          ? chalk.dim(` (${ignoredErrors.length} additional ignored)`)
+          : "") +
+        "\n"
+    );
 
-  for (const error of errors) {
-    lines.push(formatSingleError(error));
+    for (const error of errors) {
+      lines.push(formatSingleError(error));
+    }
+  }
+
+  // Show ignored errors as brief notices
+  if (ignoredErrors.length > 0) {
+    lines.push(chalk.dim("─".repeat(40)));
+    lines.push(chalk.dim("Ignored errors:\n"));
+    for (const { error, hash } of ignoredErrors) {
+      const shortHash = hash.substring(0, 12);
+      lines.push(
+        chalk.dim(
+          `  [IGNORED] ${error.file}:${error.lineStart} — ` +
+            `${error.type}: ${error.message.substring(0, 60)}... ` +
+            `(hash: ${shortHash})`
+        )
+      );
+    }
+    lines.push("");
   }
 
   lines.push(""); // trailing newline
@@ -120,9 +158,13 @@ function errorTypeToTarget(type: string): string {
 /**
  * Format validation errors as JSON for programmatic consumption.
  */
-export function formatJson(errors: ValidationError[]): string {
+export function formatJson(
+  errors: ValidationError[],
+  ignoredErrors: IgnoredError[] = []
+): string {
   const output = {
     totalErrors: errors.length,
+    totalIgnored: ignoredErrors.length,
     errors: errors.map((e) => ({
       type: e.type,
       severity: e.severity,
@@ -137,6 +179,13 @@ export function formatJson(errors: ValidationError[]): string {
         text: c.text,
         isError: c.isError,
       })),
+    })),
+    ignored: ignoredErrors.map(({ error: e, hash }) => ({
+      type: e.type,
+      file: e.file,
+      lineStart: e.lineStart,
+      message: e.message,
+      hash,
     })),
   };
   return JSON.stringify(output, null, 2);

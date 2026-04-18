@@ -95,7 +95,25 @@ function splitOnGo(content: string): string[] {
 }
 
 function containsQueryKeywords(sql: string): boolean {
-  return /\b(SELECT|INSERT|UPDATE|DELETE|MERGE|EXEC|EXECUTE)\b/i.test(sql);
+  // Must have a primary verb (SELECT, INSERT, etc.)
+  const hasPrimaryVerb =
+    /\b(SELECT|INSERT\s+INTO|UPDATE|DELETE\s+FROM|MERGE\s+INTO|EXEC|EXECUTE)\b/i.test(sql);
+  if (!hasPrimaryVerb) return false;
+
+  // EXEC/EXECUTE is sufficient on its own
+  if (/\b(EXEC|EXECUTE)\b/i.test(sql)) return true;
+
+  // Allow standalone function/procedure calls like `SELECT dbo.fn_Name(...)`
+  // where a schema-qualified function call appears after SELECT.
+  if (/\bSELECT\s+\w+\s*\.\s*\w+\s*\(/i.test(sql)) return true;
+
+  // Require structural companions that look like real SQL, not prose or CSS:
+  //   FROM <identifier>  — not "from {" (CSS keyframes) or "from the menu" (prose)
+  //   WHERE <ident>      — not "where are you"
+  //   JOIN <ident>, VALUES (, SET <col>=, INTO <ident>, ON <a>.<b>
+  const hasStructural =
+    /\b(FROM\s+[\[\w]+[\w\]]*\s*(?:\.|\(|AS\b|,|\s+\w+|\s*$)|WHERE\s+[\[\w]+[\w\]]*\s*[=<>!.]|JOIN\s+[\[\w]|VALUES\s*\(|SET\s+\w+\s*=|INTO\s+[\[\w]+[\w\]]*|ON\s+\w+\s*\.\s*\w+)/i.test(sql);
+  return hasStructural;
 }
 
 // ── C# files: extract SQL from string literals ──

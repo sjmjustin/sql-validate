@@ -1,6 +1,6 @@
 {
   "name": "sql-validate",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "Static analysis CLI that validates SQL queries in source code against SQL Server schema files. Built for AI coding agent pipelines.",
   "main": "dist/cli.js",
   "bin": {

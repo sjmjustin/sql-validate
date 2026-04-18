@@ -165,15 +165,58 @@ function buildAliasMap(sql: string, catalog: SchemaCatalog): AliasMap {
     registerTable(mergeMatch[1], mergeMatch[2]);
   }
 
-  // Detect CTEs: WITH name AS ( ... ) — register CTE names so they aren't
-  // flagged as missing tables when referenced in the main query
-  const cteRegex = /\bWITH\s+(\[?[\w]+\]?)(?:\s*\([^)]*\))?\s+AS\s*\(/gi;
-  let cteMatch: RegExpExecArray | null;
-  while ((cteMatch = cteRegex.exec(sql)) !== null) {
-    const cteName = stripBrackets(cteMatch[1]).toLowerCase();
-    if (!isSqlKeyword(cteName)) {
-      // Register as a known alias pointing to a virtual table
-      aliases.set(cteName, { schema: "__cte__", table: cteName, fqn: `__cte__.${cteName}` });
+  // Detect CTEs: WITH name AS ( ... ), name2 AS ( ... ), name3 AS ( ... )
+  // Register every CTE name so they aren't flagged as missing tables.
+  // Handles multi-CTE chains including recursive CTEs with UNION ALL.
+  const ctePrefixRegex = /\bWITH\s+(?!.*\bAS\b.*\bAS\b\s+TABLE\b)/gi;
+  let prefixMatch: RegExpExecArray | null;
+  while ((prefixMatch = ctePrefixRegex.exec(sql)) !== null) {
+    // Scan forward from the WITH to find all "name AS (" patterns until
+    // we hit a top-level SELECT/INSERT/UPDATE/DELETE/MERGE that isn't inside parens.
+    const startPos = prefixMatch.index + prefixMatch[0].length;
+    const remaining = sql.substring(startPos);
+    // Match "name [(col list)] AS ("
+    const cteItemRegex = /(\[?[\w]+\]?)(?:\s*\([^)]*\))?\s+AS\s*\(/gi;
+    let depth = 0;
+    let lastEnd = 0;
+    let ctem: RegExpExecArray | null;
+    while ((ctem = cteItemRegex.exec(remaining)) !== null) {
+      // Track paren depth between this match and the previous one
+      const between = remaining.substring(lastEnd, ctem.index);
+      for (const ch of between) {
+        if (ch === "(") depth++;
+        else if (ch === ")") depth--;
+      }
+      // Only accept CTE names at top-level (depth 0 when "name AS (" starts)
+      if (depth !== 0) {
+        lastEnd = ctem.index + ctem[0].length;
+        continue;
+      }
+      const cteName = stripBrackets(ctem[1]).toLowerCase();
+      if (!isSqlKeyword(cteName)) {
+        aliases.set(cteName, { schema: "__cte__", table: cteName, fqn: `__cte__.${cteName}` });
+      }
+      // The matched "AS (" opened a paren — track it
+      depth++;
+      lastEnd = ctem.index + ctem[0].length;
+    }
+    break; // only process the first WITH (SQL allows only one WITH per query)
+  }
+
+  // Detect TVF usage in FROM clause: FROM STRING_SPLIT(...) AS alias
+  // Register the alias with the TVF's known output columns as a virtual table.
+  const tvfRegex = /\b(?:FROM|JOIN|APPLY)\s+(\w+)\s*\([^)]*\)\s+(?:AS\s+)?(\[?[\w]+\]?)/gi;
+  let tvfMatch: RegExpExecArray | null;
+  while ((tvfMatch = tvfRegex.exec(sql)) !== null) {
+    const funcName = tvfMatch[1].toLowerCase();
+    const aliasName = stripBrackets(tvfMatch[2]).toLowerCase();
+    if (TVF_COLUMNS[funcName] && !isSqlKeyword(aliasName)) {
+      // Register as a CTE-style alias (columns checked against TVF_COLUMNS)
+      aliases.set(aliasName, {
+        schema: "__tvf__",
+        table: funcName,
+        fqn: `__tvf__.${funcName}`,
+      });
     }
   }
 
@@ -265,6 +308,18 @@ function validateColumnRefs(
 
     // Skip CTE columns (we don't know their column lists)
     if (tableRef.fqn.startsWith("__cte__.")) continue;
+
+    // Validate TVF output columns against the known column set
+    if (tableRef.fqn.startsWith("__tvf__.")) {
+      const tvfName = tableRef.fqn.substring("__tvf__.".length);
+      const known = TVF_COLUMNS[tvfName];
+      if (known && !known.has(colNameLower)) {
+        // The column isn't one of the known TVF outputs — but we skip
+        // flagging since the TVF set may not be complete; better to
+        // avoid false positives here.
+      }
+      continue;
+    }
 
     const table = catalog.tables.get(tableRef.fqn);
     if (!table) continue; // Table doesn't exist — already caught by table validation
@@ -372,6 +427,17 @@ function checkUnqualifiedColumn(
   if (!table.columns.has(colNameLower)) {
     // Make sure it's not an alias name
     if (aliasMap.aliases.has(colNameLower)) return;
+
+    // Skip if it's a known TVF output column (e.g., SELECT value FROM STRING_SPLIT)
+    for (const [, alias] of aliasMap.aliases) {
+      if (alias.fqn.startsWith("__tvf__.")) {
+        const tvfName = alias.fqn.substring("__tvf__.".length);
+        if (TVF_COLUMNS[tvfName]?.has(colNameLower)) return;
+      }
+    }
+    // Also check if the column appears in any TVF's output even without an
+    // explicit alias (e.g., FROM STRING_SPLIT(...) with no alias)
+    if (isTvfOutputColumn(colNameLower, query.sql)) return;
 
     const location = findInSource(query, new RegExp(`\\b${escapeRegex(cleaned)}\\b`, "i"));
     const allColNames = Array.from(table.columns.values()).map((c) => c.name);
@@ -703,6 +769,13 @@ function isSqlKeyword(word: string): boolean {
   return SQL_KEYWORDS.has(word.toLowerCase());
 }
 
+/** Known output columns for T-SQL table-valued functions */
+const TVF_COLUMNS: Record<string, Set<string>> = {
+  string_split: new Set(["value", "ordinal"]),
+  openjson: new Set(["key", "value", "type"]),
+  generate_series: new Set(["value"]),
+};
+
 /** T-SQL built-in functions (scalar + table-valued) that should not be flagged */
 const TSQL_BUILTIN_FUNCTIONS = new Set([
   // Scalar functions
@@ -732,6 +805,21 @@ const TSQL_BUILTIN_FUNCTIONS = new Set([
 
 function isBuiltinFunction(name: string): boolean {
   return TSQL_BUILTIN_FUNCTIONS.has(name.toLowerCase());
+}
+
+/**
+ * Check if `colName` is a known output column of any TVF referenced in `sql`.
+ * Catches unqualified references like SELECT value FROM STRING_SPLIT(...)
+ * even when the TVF has no explicit alias.
+ */
+function isTvfOutputColumn(colName: string, sql: string): boolean {
+  for (const [tvfName, cols] of Object.entries(TVF_COLUMNS)) {
+    if (!cols.has(colName)) continue;
+    // Is this TVF used in the SQL?
+    const tvfRegex = new RegExp(`\\b${tvfName}\\s*\\(`, "i");
+    if (tvfRegex.test(sql)) return true;
+  }
+  return false;
 }
 
 function isBuiltinSchema(schema: string): boolean {

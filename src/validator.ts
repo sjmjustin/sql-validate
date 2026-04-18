@@ -74,6 +74,8 @@ function buildAliasMap(sql: string, catalog: SchemaCatalog): AliasMap {
     if (isSqlKeyword(name)) return;
     // Skip built-in schemas (sys, information_schema) and system databases
     if (isBuiltinSchema(schema) || isSystemDatabase(schema)) return;
+    // Skip T-SQL built-in functions used as table sources (e.g., FROM STRING_SPLIT(...))
+    if (isBuiltinFunction(name)) return;
     // Skip names that are clearly not identifiers (contain spaces, operators, etc.)
     if (/[^a-zA-Z0-9_#@]/.test(name)) return;
     const fqn = `${schema.toLowerCase()}.${name.toLowerCase()}`;
@@ -414,6 +416,9 @@ function validateFunctionRefs(
     // Skip single-char names (likely regex noise)
     if (funcName.length <= 1) continue;
 
+    // Skip T-SQL built-in functions (DATEDIFF, CAST, STRING_SPLIT, etc.)
+    if (isBuiltinFunction(funcName)) continue;
+
     // Skip if the schema part matches a known table alias (it's a column access, not a function)
     // Also skip built-in schemas like sys, INFORMATION_SCHEMA
     if (isBuiltinSchema(schemaPart)) continue;
@@ -696,6 +701,37 @@ const SQL_KEYWORDS = new Set([
 
 function isSqlKeyword(word: string): boolean {
   return SQL_KEYWORDS.has(word.toLowerCase());
+}
+
+/** T-SQL built-in functions (scalar + table-valued) that should not be flagged */
+const TSQL_BUILTIN_FUNCTIONS = new Set([
+  // Scalar functions
+  "getdate", "getutcdate", "sysdatetime", "sysutcdatetime", "sysdatetimeoffset",
+  "datediff", "dateadd", "datepart", "datename", "year", "month", "day",
+  "cast", "convert", "try_cast", "try_convert", "parse", "try_parse",
+  "isnull", "coalesce", "nullif", "iif", "choose",
+  "len", "datalength", "left", "right", "substring", "charindex", "patindex",
+  "replace", "stuff", "reverse", "replicate", "space", "trim", "ltrim", "rtrim",
+  "upper", "lower", "format", "concat", "concat_ws", "string_agg",
+  "abs", "ceiling", "floor", "round", "power", "sqrt", "sign", "rand",
+  "newid", "newsequentialid", "checksum", "binary_checksum", "hashbytes",
+  "row_number", "rank", "dense_rank", "ntile", "lag", "lead",
+  "first_value", "last_value", "percent_rank", "cume_dist",
+  "count", "sum", "avg", "min", "max", "stdev", "stdevp", "var", "varp",
+  "object_id", "object_name", "db_id", "db_name", "schema_id", "schema_name",
+  "type_id", "type_name", "col_name", "col_length",
+  "scope_identity", "ident_current", "identity",
+  "error_message", "error_number", "error_severity", "error_state", "error_line", "error_procedure",
+  "host_name", "app_name", "suser_sname", "suser_sid", "user_name", "user_id",
+  "json_value", "json_query", "json_modify", "isjson", "openjson",
+  "greatest", "least",
+  // Table-valued functions
+  "string_split", "openjson", "openxml", "openrowset", "openquery",
+  "generate_series", "nodes",
+]);
+
+function isBuiltinFunction(name: string): boolean {
+  return TSQL_BUILTIN_FUNCTIONS.has(name.toLowerCase());
 }
 
 function isBuiltinSchema(schema: string): boolean {

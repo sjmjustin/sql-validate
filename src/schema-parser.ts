@@ -84,10 +84,12 @@ function parseCreateTables(
   sourceFile: string,
   catalog: SchemaCatalog
 ): void {
-  // Match CREATE TABLE [schema].[name] ( ... )
-  // Use a regex that finds CREATE TABLE then captures the column block
+  // Match CREATE TABLE [schema].[name] ( ... ) — handles both:
+  //   - Direct SSMS exports: CREATE TABLE [dbo].[Name](\n...\n)
+  //   - Guarded deployment scripts: IF NOT EXISTS ... BEGIN\n  CREATE TABLE dbo.Name\n  (\n  ...\n  );\nEND
+  // The closing paren can be followed by optional ; and whitespace
   const tableRegex =
-    /CREATE\s+TABLE\s+((?:\[?[\w]+\]?\.)?(?:\[?[\w]+\]?))\s*\(([\s\S]*?)\n\)/gi;
+    /CREATE\s+TABLE\s+((?:\[?[\w]+\]?\.)?(?:\[?[\w]+\]?))\s*\(([\s\S]*?)\n[ \t]*\);?/gi;
 
   let match: RegExpExecArray | null;
   while ((match = tableRegex.exec(content)) !== null) {

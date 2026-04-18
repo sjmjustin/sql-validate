@@ -379,6 +379,20 @@ If you're comparing the tool's table count against a raw `grep "CREATE TABLE"` o
 - **npm** 8+
 - SQL Server schema files exported from SSMS (or hand-written `CREATE TABLE/VIEW/FUNCTION/PROCEDURE/INDEX` scripts)
 
+## Versioning
+
+This project follows [Semantic Versioning 2.0.0](https://semver.org/) with one caveat: while the major version is `0`, the API surface (CLI flags, exit codes, output formats) is considered unstable and may change between minor versions.
+
+Given a version number `MAJOR.MINOR.PATCH`:
+
+- **MAJOR** — Incompatible changes that require users to update their scripts or schema files. Will remain `0` until the project reaches a stable feature set and the parser accuracy is proven on a wider variety of codebases.
+- **MINOR** — New features, new supported languages, new CLI flags, significant parser improvements. May include breaking changes while `MAJOR` is `0`.
+- **PATCH** — Bug fixes, false positive reductions, documentation updates, and small non-breaking improvements.
+
+Each release is tagged in git as `vMAJOR.MINOR.PATCH`. Check the [Releases page](https://github.com/sjmjustin/sql-validate/releases) or run `sql-validate --version` to see what you have installed.
+
+**Current version: `0.0.3`** — beta, experimental, use at your own risk (see warning at top of this README).
+
 ## Contributing
 
 This is an experimental project. Issues and pull requests are welcome, but please keep expectations calibrated — SQL parsing is a deep rabbit hole and this tool takes a practical, regex-based approach rather than building a full T-SQL parser.

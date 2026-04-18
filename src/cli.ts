@@ -25,7 +25,7 @@ program
   .description(
     "Static analysis tool that validates SQL queries in source code against SQL Server schema files."
   )
-  .version("1.0.0")
+  .version("0.0.3")
   .option(
     "--schema <paths...>",
     "One or more SQL Server schema files (SSMS CREATE scripts)"

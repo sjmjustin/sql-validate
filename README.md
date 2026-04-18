@@ -391,7 +391,7 @@ Given a version number `MAJOR.MINOR.PATCH`:
 
 Each release is tagged in git as `vMAJOR.MINOR.PATCH`. Check the [Releases page](https://github.com/sjmjustin/sql-validate/releases) or run `sql-validate --version` to see what you have installed.
 
-**Current version: `0.0.4`** — beta, experimental, use at your own risk (see warning at top of this README).
+**Current version: `0.0.5`** — beta, experimental, use at your own risk (see warning at top of this README).
 
 ## Contributing
 

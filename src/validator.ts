@@ -68,6 +68,11 @@ function buildAliasMap(sql: string, catalog: SchemaCatalog): AliasMap {
   const aliases = new Map<string, { schema: string; table: string; fqn: string }>();
   const referencedTables = new Set<string>();
 
+  // Pre-scan for CTE names so FROM-clause resolution can route aliases
+  // that reference a CTE (e.g., FROM DailyVolume dv) to the CTE scope
+  // instead of treating DailyVolume as a missing table.
+  const cteNames = collectCteNames(sql);
+
   function registerTable(rawTable: string, rawAlias?: string): void {
     const { schema, name } = parseSimpleQualifiedName(rawTable);
     // Skip if the table name is a SQL keyword (parser noise like "FROM dbo.SELECT")
@@ -78,7 +83,23 @@ function buildAliasMap(sql: string, catalog: SchemaCatalog): AliasMap {
     if (isBuiltinFunction(name)) return;
     // Skip names that are clearly not identifiers (contain spaces, operators, etc.)
     if (/[^a-zA-Z0-9_#@]/.test(name)) return;
-    const fqn = `${schema.toLowerCase()}.${name.toLowerCase()}`;
+
+    const nameLower = name.toLowerCase();
+    // If this "table" is actually a CTE defined in the same query, route
+    // its alias to the CTE scope instead of the schema scope.
+    if (cteNames.has(nameLower)) {
+      const cteFqn = `__cte__.${nameLower}`;
+      if (rawAlias) {
+        const alias = stripBrackets(rawAlias).toLowerCase();
+        if (!isSqlKeyword(alias)) {
+          aliases.set(alias, { schema: "__cte__", table: name, fqn: cteFqn });
+        }
+      }
+      aliases.set(nameLower, { schema: "__cte__", table: name, fqn: cteFqn });
+      return;
+    }
+
+    const fqn = `${schema.toLowerCase()}.${nameLower}`;
     referencedTables.add(fqn);
 
     if (rawAlias) {
@@ -88,7 +109,7 @@ function buildAliasMap(sql: string, catalog: SchemaCatalog): AliasMap {
       }
     }
     // Also register the table name itself as an implicit alias
-    aliases.set(name.toLowerCase(), { schema, table: name, fqn });
+    aliases.set(nameLower, { schema, table: name, fqn });
   }
 
   // Match explicit JOIN clauses (these are unambiguous)
@@ -107,9 +128,10 @@ function buildAliasMap(sql: string, catalog: SchemaCatalog): AliasMap {
   }
 
   // Match FROM clause — may contain comma-separated tables
-  // Capture everything between FROM and the next clause keyword
+  // Capture everything between FROM and the next clause keyword.
+  // Also stop at ) or another SELECT to avoid bleeding out of subqueries/CTEs.
   const fromRegex =
-    /\bFROM\s+([\s\S]*?)(?=\bWHERE\b|\bGROUP\b|\bORDER\b|\bHAVING\b|\bUNION\b|\bINNER\b|\bLEFT\b|\bRIGHT\b|\bCROSS\b|\bFULL\b|\bJOIN\b|\bON\b|\bSET\b|\bOUTPUT\b|$)/gi;
+    /\bFROM\s+([\s\S]*?)(?=\bWHERE\b|\bGROUP\b|\bORDER\b|\bHAVING\b|\bUNION\b|\bINNER\b|\bLEFT\b|\bRIGHT\b|\bCROSS\b|\bFULL\b|\bJOIN\b|\bON\b|\bSET\b|\bOUTPUT\b|\bSELECT\b|\)|$)/gi;
 
   while ((match = fromRegex.exec(sql)) !== null) {
     const fromClause = match[1].trim();
@@ -165,42 +187,9 @@ function buildAliasMap(sql: string, catalog: SchemaCatalog): AliasMap {
     registerTable(mergeMatch[1], mergeMatch[2]);
   }
 
-  // Detect CTEs: WITH name AS ( ... ), name2 AS ( ... ), name3 AS ( ... )
-  // Register every CTE name so they aren't flagged as missing tables.
-  // Handles multi-CTE chains including recursive CTEs with UNION ALL.
-  const ctePrefixRegex = /\bWITH\s+(?!.*\bAS\b.*\bAS\b\s+TABLE\b)/gi;
-  let prefixMatch: RegExpExecArray | null;
-  while ((prefixMatch = ctePrefixRegex.exec(sql)) !== null) {
-    // Scan forward from the WITH to find all "name AS (" patterns until
-    // we hit a top-level SELECT/INSERT/UPDATE/DELETE/MERGE that isn't inside parens.
-    const startPos = prefixMatch.index + prefixMatch[0].length;
-    const remaining = sql.substring(startPos);
-    // Match "name [(col list)] AS ("
-    const cteItemRegex = /(\[?[\w]+\]?)(?:\s*\([^)]*\))?\s+AS\s*\(/gi;
-    let depth = 0;
-    let lastEnd = 0;
-    let ctem: RegExpExecArray | null;
-    while ((ctem = cteItemRegex.exec(remaining)) !== null) {
-      // Track paren depth between this match and the previous one
-      const between = remaining.substring(lastEnd, ctem.index);
-      for (const ch of between) {
-        if (ch === "(") depth++;
-        else if (ch === ")") depth--;
-      }
-      // Only accept CTE names at top-level (depth 0 when "name AS (" starts)
-      if (depth !== 0) {
-        lastEnd = ctem.index + ctem[0].length;
-        continue;
-      }
-      const cteName = stripBrackets(ctem[1]).toLowerCase();
-      if (!isSqlKeyword(cteName)) {
-        aliases.set(cteName, { schema: "__cte__", table: cteName, fqn: `__cte__.${cteName}` });
-      }
-      // The matched "AS (" opened a paren — track it
-      depth++;
-      lastEnd = ctem.index + ctem[0].length;
-    }
-    break; // only process the first WITH (SQL allows only one WITH per query)
+  // Register all CTE names collected earlier as aliases in the CTE scope.
+  for (const cteName of cteNames) {
+    aliases.set(cteName, { schema: "__cte__", table: cteName, fqn: `__cte__.${cteName}` });
   }
 
   // Detect TVF usage in FROM clause: FROM STRING_SPLIT(...) AS alias
@@ -805,6 +794,41 @@ const TSQL_BUILTIN_FUNCTIONS = new Set([
 
 function isBuiltinFunction(name: string): boolean {
   return TSQL_BUILTIN_FUNCTIONS.has(name.toLowerCase());
+}
+
+/**
+ * Collect all CTE names defined in a query: WITH name AS (...), name2 AS (...), ...
+ * Uses paren-depth tracking to only pick up top-level CTE names, not names
+ * that appear inside the CTE bodies themselves.
+ */
+function collectCteNames(sql: string): Set<string> {
+  const names = new Set<string>();
+  // SQL allows only one WITH clause per statement — find the first one
+  const withMatch = /\bWITH\s+/i.exec(sql);
+  if (!withMatch) return names;
+
+  const startPos = withMatch.index + withMatch[0].length;
+  const remaining = sql.substring(startPos);
+  const cteItemRegex = /(\[?[\w]+\]?)(?:\s*\([^)]*\))?\s+AS\s*\(/gi;
+  let depth = 0;
+  let lastEnd = 0;
+  let ctem: RegExpExecArray | null;
+  while ((ctem = cteItemRegex.exec(remaining)) !== null) {
+    const between = remaining.substring(lastEnd, ctem.index);
+    for (const ch of between) {
+      if (ch === "(") depth++;
+      else if (ch === ")") depth--;
+    }
+    if (depth !== 0) {
+      lastEnd = ctem.index + ctem[0].length;
+      continue;
+    }
+    const cteName = stripBrackets(ctem[1]).toLowerCase();
+    if (!isSqlKeyword(cteName)) names.add(cteName);
+    depth++;
+    lastEnd = ctem.index + ctem[0].length;
+  }
+  return names;
 }
 
 /**

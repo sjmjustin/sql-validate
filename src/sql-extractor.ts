@@ -95,25 +95,65 @@ function splitOnGo(content: string): string[] {
 }
 
 function containsQueryKeywords(sql: string): boolean {
-  // Must have a primary verb (SELECT, INSERT, etc.)
-  const hasPrimaryVerb =
-    /\b(SELECT|INSERT\s+INTO|UPDATE|DELETE\s+FROM|MERGE\s+INTO|EXEC|EXECUTE)\b/i.test(sql);
-  if (!hasPrimaryVerb) return false;
+  // The string must START with a SQL statement (after trimming leading
+  // whitespace, semicolons, and SQL comments). This rejects prose like
+  // "Update the following inmate dossier..." where UPDATE is just an
+  // English verb mid-sentence.
+  const trimmedStart = stripLeadingSqlNoise(sql);
+  // Require a recognizable SQL statement opening. Each verb has a required
+  // continuation pattern that prose rarely produces:
+  //   UPDATE <ident> SET ...        (not "Update the following...")
+  //   INSERT INTO <ident> (...)
+  //   DELETE FROM <ident>           (or just DELETE in T-SQL sometimes)
+  //   MERGE INTO <ident>
+  //   SELECT ... (has its own checks below)
+  //   WITH <ident> AS (
+  //   EXEC / EXECUTE <ident>
+  const startsWithSqlVerb =
+    /^(SELECT\b|INSERT\s+INTO\s+[\[\w]|UPDATE\s+[\[\w][\w.\[\]]*\s+SET\s+|DELETE\s+FROM\s+[\[\w]|DELETE\s+[\[\w][\w.\[\]]*\s+(?:FROM|WHERE|OUTPUT)\b|MERGE\s+(?:INTO\s+)?[\[\w]|WITH\s+[\[\w][\w\[\]]*\s*(?:\([^)]*\))?\s+AS\s*\(|EXEC(?:UTE)?\s+[\[\w@])/i.test(
+      trimmedStart
+    );
+  if (!startsWithSqlVerb) return false;
 
-  // EXEC/EXECUTE is sufficient on its own
-  if (/\b(EXEC|EXECUTE)\b/i.test(sql)) return true;
+  // EXEC/EXECUTE is sufficient on its own (stored proc call)
+  if (/^(EXEC|EXECUTE)\b/i.test(trimmedStart)) return true;
 
   // Allow standalone function/procedure calls like `SELECT dbo.fn_Name(...)`
   // where a schema-qualified function call appears after SELECT.
-  if (/\bSELECT\s+\w+\s*\.\s*\w+\s*\(/i.test(sql)) return true;
+  if (/^SELECT\s+\w+\s*\.\s*\w+\s*\(/i.test(trimmedStart)) return true;
 
-  // Require structural companions that look like real SQL, not prose or CSS:
-  //   FROM <identifier>  — not "from {" (CSS keyframes) or "from the menu" (prose)
-  //   WHERE <ident>      — not "where are you"
+  // WITH (CTE) form is allowed — structural check still applies below
+  // to ensure the CTE body contains FROM/WHERE/etc.
+
+  // Require structural companions that look like real SQL:
+  //   FROM <identifier>  — not "from {" (CSS) or random prose
+  //   WHERE <ident>      — followed by =/</>/./!, an operator
   //   JOIN <ident>, VALUES (, SET <col>=, INTO <ident>, ON <a>.<b>
   const hasStructural =
     /\b(FROM\s+[\[\w]+[\w\]]*\s*(?:\.|\(|AS\b|,|\s+\w+|\s*$)|WHERE\s+[\[\w]+[\w\]]*\s*[=<>!.]|JOIN\s+[\[\w]|VALUES\s*\(|SET\s+\w+\s*=|INTO\s+[\[\w]+[\w\]]*|ON\s+\w+\s*\.\s*\w+)/i.test(sql);
   return hasStructural;
+}
+
+/**
+ * Strip leading whitespace, semicolons, and SQL comments (-- and /* *\/)
+ * so that we can check whether the *code* starts with a SQL verb.
+ */
+function stripLeadingSqlNoise(sql: string): string {
+  let s = sql;
+  let changed = true;
+  while (changed) {
+    changed = false;
+    // Whitespace and leading semicolons
+    const trimmed = s.replace(/^[\s;]+/, "");
+    if (trimmed !== s) { s = trimmed; changed = true; }
+    // Line comments: -- ... \n
+    const lineComment = s.replace(/^--[^\n]*\n?/, "");
+    if (lineComment !== s) { s = lineComment; changed = true; }
+    // Block comments: /* ... */
+    const blockComment = s.replace(/^\/\*[\s\S]*?\*\//, "");
+    if (blockComment !== s) { s = blockComment; changed = true; }
+  }
+  return s;
 }
 
 // ── C# files: extract SQL from string literals ──
